@@ -3407,7 +3407,9 @@ pub fn adjustSelectionWord(
     // so whichever end is after the other is one cell past it.
     var anchor = caret;
     var moving = caret;
+    var content_pin = if (dir == .left_up) cellStep(caret, .left_up) orelse caret else caret;
     if (self.selection) |sel| {
+        content_pin = sel.start();
         if (sel.end().before(sel.start())) {
             anchor = cellStep(sel.start(), .right_down) orelse return;
             moving = sel.end();
@@ -3417,15 +3419,18 @@ pub fn adjustSelectionWord(
         }
     }
 
+    const content = content_pin.rowAndCell().cell.semantic_content;
     const new = switch (dir) {
         .left_up => self.wordEdge(
             cellStep(moving, .left_up) orelse return,
             .left_up,
+            content,
             boundary_codepoints,
         ),
         .right_down => cellStep(self.wordEdge(
             moving,
             .right_down,
+            content,
             boundary_codepoints,
         ) orelse return, .right_down),
     } orelse return;
@@ -3440,16 +3445,19 @@ pub fn adjustSelectionWord(
 }
 
 /// Returns the start (left_up) or end (right_down) of the first word
-/// found from the given pin, including the pin itself.
+/// found from the given pin, including the pin itself. Returns null if
+/// text with other semantic content is reached first.
 fn wordEdge(
     self: *Screen,
     pin: Pin,
     dir: PageList.Direction,
+    content: Cell.SemanticContent,
     boundary_codepoints: []const u21,
 ) ?Pin {
     var it = pin.cellIterator(dir, null);
     while (it.next()) |p| {
         const cp = selectWordCodepoint(p) orelse continue;
+        if (p.rowAndCell().cell.semantic_content != content) return null;
         if (std.mem.indexOfScalar(u21, boundary_codepoints, cp) != null) continue;
         const word = self.selectWord(p, boundary_codepoints) orelse continue;
         return switch (dir) {
@@ -10885,15 +10893,22 @@ test "Screen: adjustSelectionWord" {
 
     var s = try init(io, alloc, .{ .cols = 20, .rows = 1, .max_scrollback_bytes = 0 });
     defer s.deinit();
+    s.cursorSetSemanticContent(.{ .prompt = .initial });
+    try s.testWriteString("a> ");
+    s.cursorSetSemanticContent(.{ .input = .clear_explicit });
     try s.testWriteString("git  commit -m");
 
     const boundary = &[_]u21{' '};
-    const caret = s.pages.pin(.{ .active = .{ .x = 14 } }).?;
+    const caret = s.pages.pin(.{ .active = .{ .x = 17 } }).?;
     const expected = [_]struct { PageList.Direction, ?[]const u8 }{
         .{ .left_up, "-m" },
         .{ .left_up, "commit -m" },
         .{ .right_down, " -m" },
         .{ .right_down, null },
+        .{ .left_up, "-m" },
+        .{ .left_up, "commit -m" },
+        .{ .left_up, "git  commit -m" },
+        .{ .left_up, "git  commit -m" },
     };
     for (expected) |e| {
         try s.adjustSelectionWord(caret, e[0], boundary);
