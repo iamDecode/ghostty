@@ -250,6 +250,12 @@ fn actionCommands(action: Action.Key) []const Command {
             .description = i18n.N_("Select all text on the screen."),
         }},
 
+        .select_input => comptime &.{.{
+            .action = .select_input,
+            .title = i18n.N_("Select Input"),
+            .description = i18n.N_("Select the command input at the current prompt."),
+        }},
+
         .scroll_to_top => comptime &.{.{
             .action = .scroll_to_top,
             .title = i18n.N_("Scroll to Top"),
