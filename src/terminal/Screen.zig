@@ -3480,6 +3480,50 @@ pub fn selectInput(self: *Screen, pin: Pin) ?Selection {
     return .init(start orelse return null, end, false);
 }
 
+pub const PromptDeleteSelection = struct {
+    left: usize,
+    backspace: usize,
+};
+
+/// Determine the inputs necessary to delete the current selection from
+/// the prompt input: move left until the cursor is just after the
+/// selection, then backspace over it.
+///
+/// This returns null if the selection isn't entirely input on the
+/// cursor's (possibly soft-wrapped) line before the cursor.
+pub fn promptDeleteSelection(self: *Screen) ?PromptDeleteSelection {
+    const sel = self.selection orelse return null;
+    if (sel.rectangle) return null;
+    const start = sel.topLeft(self);
+    const end = sel.bottomRight(self);
+    const cursor = self.cursor.page_pin.*;
+    if (!end.before(cursor)) return null;
+
+    var result: PromptDeleteSelection = .{ .left = 0, .backspace = 0 };
+    var it = start.cellIterator(.right_down, cursor);
+    while (it.next()) |p| {
+        if (p.eql(cursor)) break;
+        const rac = p.rowAndCell();
+
+        // Crossing a hard line break isn't supported.
+        if (p.x == 0 and !p.eql(start) and !rac.row.wrap_continuation) return null;
+
+        if (!rac.cell.hasText()) continue;
+        switch (rac.cell.semantic_content) {
+            .prompt => {},
+            .output => return null,
+            .input => if (end.before(p)) {
+                result.left += 1;
+            } else {
+                result.backspace += 1;
+            },
+        }
+    }
+
+    if (result.backspace == 0) return null;
+    return result;
+}
+
 pub const LineIterator = struct {
     screen: *const Screen,
     current: ?Pin = null,
@@ -10820,6 +10864,40 @@ test "Screen: selectInput" {
 
     // No prompt above
     try testing.expect(s.selectInput(s.pages.pin(.{ .active = .{} }).?) == null);
+}
+
+test "Screen: promptDeleteSelection" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var s = try init(io, alloc, .{ .cols = 20, .rows = 3, .max_scrollback_bytes = 0 });
+    defer s.deinit();
+
+    s.cursorSetSemanticContent(.output);
+    try s.testWriteString("output\n");
+    s.cursorSetSemanticContent(.{ .prompt = .initial });
+    try s.testWriteString("$ ");
+    s.cursorSetSemanticContent(.{ .input = .clear_explicit });
+    try s.testWriteString("echo hi");
+
+    // Selecting "echo" moves left over " hi" then deletes "echo"
+    try s.select(.init(
+        s.pages.pin(.{ .active = .{ .x = 2, .y = 1 } }).?,
+        s.pages.pin(.{ .active = .{ .x = 5, .y = 1 } }).?,
+        false,
+    ));
+    const del = s.promptDeleteSelection().?;
+    try testing.expectEqual(3, del.left);
+    try testing.expectEqual(4, del.backspace);
+
+    // Selections including output aren't deleted
+    try s.select(.init(
+        s.pages.pin(.{ .active = .{ .x = 0, .y = 0 } }).?,
+        s.pages.pin(.{ .active = .{ .x = 5, .y = 1 } }).?,
+        false,
+    ));
+    try testing.expect(s.promptDeleteSelection() == null);
 }
 
 test "Screen: selectionString basic" {
