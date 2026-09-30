@@ -3450,6 +3450,33 @@ pub fn selectOutput(self: *Screen, pin: Pin) ?Selection {
     return .init(hl.start, hl.end, false);
 }
 
+pub fn selectInput(self: *Screen, pin: Pin) ?Selection {
+    _ = self;
+
+    var prompt_it = pin.promptIterator(.left_up, null);
+    const prompt_pin = prompt_it.next() orelse return null;
+
+    // Find the first and last input cells, skipping over blank cells
+    // and continuation prompts, until we reach command output.
+    var start: ?Pin = null;
+    var end: Pin = undefined;
+    var it = prompt_pin.cellIterator(.right_down, null);
+    while (it.next()) |p| {
+        const cell = p.rowAndCell().cell;
+        if (!cell.hasText()) continue;
+        switch (cell.semantic_content) {
+            .prompt => {},
+            .output => break,
+            .input => {
+                if (start == null) start = p;
+                end = p;
+            },
+        }
+    }
+
+    return .init(start orelse return null, end, false);
+}
+
 pub const LineIterator = struct {
     screen: *const Screen,
     current: ?Pin = null,
@@ -10734,6 +10761,43 @@ test "Screen: selectOutput" {
             .y = 8,
         } }).?) == null);
     }
+}
+
+test "Screen: selectInput" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var s = try init(io, alloc, .{ .cols = 10, .rows = 5, .max_scrollback_bytes = 0 });
+    defer s.deinit();
+
+    s.cursorSetSemanticContent(.output);
+    try s.testWriteString("output\n");
+    s.cursorSetSemanticContent(.{ .prompt = .initial });
+    try s.testWriteString("$ ");
+    s.cursorSetSemanticContent(.{ .input = .clear_explicit });
+    try s.testWriteString("echo \\\n");
+    s.cursorSetSemanticContent(.{ .prompt = .continuation });
+    try s.testWriteString("> ");
+    s.cursorSetSemanticContent(.{ .input = .clear_explicit });
+    try s.testWriteString("hi\n");
+    s.cursorSetSemanticContent(.output);
+    try s.testWriteString("hi");
+
+    // Multi-line input, selected from the continuation line
+    {
+        var sel = s.selectInput(s.pages.pin(.{ .active = .{ .y = 2 } }).?).?;
+        defer sel.deinit(&s);
+        const contents = try s.selectionString(alloc, .{
+            .sel = sel,
+            .trim = false,
+        });
+        defer alloc.free(contents);
+        try testing.expectEqualStrings("echo \\\n> hi", contents);
+    }
+
+    // No prompt above
+    try testing.expect(s.selectInput(s.pages.pin(.{ .active = .{} }).?) == null);
 }
 
 test "Screen: selectionString basic" {
