@@ -3454,7 +3454,7 @@ pub fn selectOutput(self: *Screen, pin: Pin) ?Selection {
 }
 
 pub fn selectInput(self: *Screen, pin: Pin) ?Selection {
-    _ = self;
+    const cursor = self.cursor.page_pin.*;
 
     var prompt_it = pin.promptIterator(.left_up, null);
     const prompt_pin = prompt_it.next() orelse return null;
@@ -3471,6 +3471,9 @@ pub fn selectInput(self: *Screen, pin: Pin) ?Selection {
             .prompt => {},
             .output => break,
             .input => {
+                // Shells like fish draw autosuggestions as input after
+                // the cursor, conventionally in bright black. Skip those.
+                if (!p.before(cursor) and isAutosuggestion(p)) continue;
                 if (start == null) start = p;
                 end = p;
             },
@@ -3478,6 +3481,16 @@ pub fn selectInput(self: *Screen, pin: Pin) ?Selection {
     }
 
     return .init(start orelse return null, end, false);
+}
+
+fn isAutosuggestion(pin: Pin) bool {
+    const cell = pin.rowAndCell().cell;
+    if (cell.style_id == style.default_id) return false;
+    const page = pin.node.page();
+    return switch (page.styles.get(page.memory, cell.style_id).fg_color) {
+        .palette => |idx| idx == 8,
+        else => false,
+    };
 }
 
 pub const PromptDeleteSelection = struct {
@@ -10864,6 +10877,34 @@ test "Screen: selectInput" {
 
     // No prompt above
     try testing.expect(s.selectInput(s.pages.pin(.{ .active = .{} }).?) == null);
+}
+
+test "Screen: selectInput skips autosuggestion" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var s = try init(io, alloc, .{ .cols = 20, .rows = 3, .max_scrollback_bytes = 0 });
+    defer s.deinit();
+
+    // Typed "exa" with the autosuggestion "mple/" drawn after the cursor
+    s.cursorSetSemanticContent(.{ .prompt = .initial });
+    try s.testWriteString("$ ");
+    s.cursorSetSemanticContent(.{ .input = .clear_explicit });
+    try s.testWriteString("exa");
+    try s.setAttribute(.{ .@"256_fg" = 8 });
+    try s.testWriteString("mple/");
+    try s.setAttribute(.unset);
+    s.cursorAbsolute(5, 0);
+
+    var sel = s.selectInput(s.cursor.page_pin.*).?;
+    defer sel.deinit(&s);
+    const contents = try s.selectionString(alloc, .{
+        .sel = sel,
+        .trim = false,
+    });
+    defer alloc.free(contents);
+    try testing.expectEqualStrings("exa", contents);
 }
 
 test "Screen: promptDeleteSelection" {
