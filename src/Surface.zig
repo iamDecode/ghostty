@@ -5599,6 +5599,22 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
             }
         },
 
+        .select_input => {
+            self.renderer_state.mutex.lockUncancelable(global.io());
+            defer self.renderer_state.mutex.unlock(global.io());
+
+            const t = &self.io.terminal;
+            const screen = t.screens.active;
+            const sel = if (t.cursorIsAtPrompt())
+                screen.selectInput(screen.cursor.page_pin.*)
+            else
+                screen.selectAll();
+            if (sel) |s| {
+                try self.setSelectionAndCopy(s);
+                try self.queueRender();
+            }
+        },
+
         .inspector => |mode| return try self.rt_app.performAction(
             .{ .surface = self },
             .inspector,
