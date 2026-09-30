@@ -1,0 +1,47 @@
+name: Upstream Sync
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: upstream-sync
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/ghostty-org/ghostty.git
+          git fetch upstream main
+          git push --force origin upstream/main:refs/heads/upstream-main
+
+      - name: Rebase branches onto upstream
+        run: |
+          failed=0
+          for branch in $(git for-each-ref --format='%(refname:lstrip=3)' refs/remotes/origin); do
+            [ "$branch" = HEAD ] || [ "$branch" = upstream-main ] && continue
+            git checkout "$branch"
+            git merge-base --is-ancestor upstream/main "$branch" && continue
+            if git rebase upstream/main; then
+              git push --force-with-lease origin "$branch"
+            else
+              echo "::error::Rebase of $branch failed due to conflicts."
+              git rebase --abort
+              failed=1
+            fi
+          done
+          exit $failed
