@@ -2896,6 +2896,12 @@ pub fn keyCallback(
         break :event copy;
     };
 
+    // Backspace with a selected prompt input deletes the selection.
+    if (event.key == .backspace and
+        event.action != .release and
+        event.mods.binding().empty() and
+        try self.deleteSelectedInput()) return .consumed;
+
     // Encode and send our key. If we didn't encode anything, then we
     // return the effect as ignored.
     if (try self.encodeKey(
@@ -4378,6 +4384,23 @@ fn maybePromptClick(self: *Surface) !bool {
         },
     }
 
+    return true;
+}
+
+fn deleteSelectedInput(self: *Surface) !bool {
+    self.renderer_state.mutex.lockUncancelable(global.io());
+    defer self.renderer_state.mutex.unlock(global.io());
+
+    const t = &self.io.terminal;
+    if (!t.cursorIsAtPrompt()) return false;
+    const del = t.screens.active.promptDeleteSelection() orelse return false;
+
+    const left_arrow = if (t.modes.get(.cursor_keys)) "\x1bOD" else "\x1b[D";
+    for (0..del.left) |_| self.queueIo(.{ .write_stable = left_arrow }, .locked);
+    for (0..del.backspace) |_| self.queueIo(.{ .write_stable = "\x7f" }, .locked);
+
+    try self.setSelection(null);
+    try self.queueRender();
     return true;
 }
 
