@@ -507,6 +507,12 @@ pub const Action = union(enum) {
     ///     Adjust the selection to the beginning or the end of the line
     ///     respectively.
     ///
+    ///   - `word_left`, `word_right`
+    ///
+    ///     Adjust the selection to the start of the previous word or the
+    ///     end of the next word respectively. If there is no selection and
+    ///     the cursor is at a prompt, this starts a selection at the cursor.
+    ///
     adjust_selection: AdjustSelection,
 
     /// Jump the viewport forward or back by the given number of prompts.
@@ -1049,6 +1055,8 @@ pub const Action = union(enum) {
         end,
         beginning_of_line,
         end_of_line,
+        word_left,
+        word_right,
     };
 
     pub const SplitDirection = enum {

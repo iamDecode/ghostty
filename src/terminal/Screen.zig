@@ -3393,6 +3393,81 @@ fn selectWordCodepoint(pin: Pin) ?u21 {
     return if (cell.hasText()) cell.content.codepoint.data else null;
 }
 
+/// Adjust the selection by a word like a text field: the anchor stays put
+/// and the moving edge jumps to the start of the previous word (left_up) or
+/// past the end of the next word (right_down). Without a selection, both
+/// edges start just before the `caret` cell.
+pub fn adjustSelectionWord(
+    self: *Screen,
+    caret: Pin,
+    dir: PageList.Direction,
+    boundary_codepoints: []const u21,
+) !void {
+    // Edges are positions just before a cell. Selections are inclusive
+    // so whichever end is after the other is one cell past it.
+    var anchor = caret;
+    var moving = caret;
+    if (self.selection) |sel| {
+        if (sel.end().before(sel.start())) {
+            anchor = cellStep(sel.start(), .right_down) orelse return;
+            moving = sel.end();
+        } else {
+            anchor = sel.start();
+            moving = cellStep(sel.end(), .right_down) orelse return;
+        }
+    }
+
+    const new = switch (dir) {
+        .left_up => self.wordEdge(
+            cellStep(moving, .left_up) orelse return,
+            .left_up,
+            boundary_codepoints,
+        ),
+        .right_down => cellStep(self.wordEdge(
+            moving,
+            .right_down,
+            boundary_codepoints,
+        ) orelse return, .right_down),
+    } orelse return;
+
+    if (new.before(anchor)) {
+        try self.select(.init(cellStep(anchor, .left_up).?, new, false));
+    } else if (anchor.before(new)) {
+        try self.select(.init(anchor, cellStep(new, .left_up).?, false));
+    } else {
+        self.clearSelection();
+    }
+}
+
+/// Returns the start (left_up) or end (right_down) of the first word
+/// found from the given pin, including the pin itself.
+fn wordEdge(
+    self: *Screen,
+    pin: Pin,
+    dir: PageList.Direction,
+    boundary_codepoints: []const u21,
+) ?Pin {
+    var it = pin.cellIterator(dir, null);
+    while (it.next()) |p| {
+        const cp = selectWordCodepoint(p) orelse continue;
+        if (std.mem.indexOfScalar(u21, boundary_codepoints, cp) != null) continue;
+        const word = self.selectWord(p, boundary_codepoints) orelse continue;
+        return switch (dir) {
+            .left_up => word.start(),
+            .right_down => word.end(),
+        };
+    }
+
+    return null;
+}
+
+/// Returns the cell next to the given pin in the given direction.
+fn cellStep(pin: Pin, dir: PageList.Direction) ?Pin {
+    var it = pin.cellIterator(dir, null);
+    _ = it.next();
+    return it.next();
+}
+
 /// Select the command output under the given point. The limits of the output
 /// are determined by semantic prompt information provided by shell integration.
 /// A selection can span multiple physical lines if they are soft-wrapped.
@@ -10801,6 +10876,38 @@ test "Screen: promptSelectionMove" {
     s.cursorAbsolute(2, 0);
     try testing.expectEqual(PromptClickMove.zero, s.promptSelectionMove(.left_up).?);
     try testing.expectEqual(PromptClickMove{ .left = 0, .right = 7 }, s.promptSelectionMove(.right_down).?);
+}
+
+test "Screen: adjustSelectionWord" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var s = try init(io, alloc, .{ .cols = 20, .rows = 1, .max_scrollback_bytes = 0 });
+    defer s.deinit();
+    try s.testWriteString("git  commit -m");
+
+    const boundary = &[_]u21{' '};
+    const caret = s.pages.pin(.{ .active = .{ .x = 14 } }).?;
+    const expected = [_]struct { PageList.Direction, ?[]const u8 }{
+        .{ .left_up, "-m" },
+        .{ .left_up, "commit -m" },
+        .{ .right_down, " -m" },
+        .{ .right_down, null },
+    };
+    for (expected) |e| {
+        try s.adjustSelectionWord(caret, e[0], boundary);
+        const str = e[1] orelse {
+            try testing.expect(s.selection == null);
+            continue;
+        };
+        const contents = try s.selectionString(alloc, .{
+            .sel = s.selection.?,
+            .trim = false,
+        });
+        defer alloc.free(contents);
+        try testing.expectEqualStrings(str, contents);
+    }
 }
 
 test "Screen: selectOutput" {

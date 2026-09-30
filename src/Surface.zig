@@ -5793,24 +5793,45 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
             defer self.renderer_state.mutex.unlock(global.io());
 
             const screen: *terminal.Screen = self.io.terminal.screens.active;
+
+            // Word adjustments at a prompt start a selection at the cursor.
+            if (direction == .word_left or direction == .word_right) {
+                if (screen.selection == null and
+                    !self.io.terminal.cursorIsAtPrompt()) return false;
+                try screen.adjustSelectionWord(
+                    screen.cursor.page_pin.*,
+                    if (direction == .word_left) .left_up else .right_down,
+                    self.config.selection_word_chars,
+                );
+
+                // The selection may have collapsed to nothing.
+                if (screen.selection == null) {
+                    try self.queueRender();
+                    return true;
+                }
+            }
+
             const sel = if (screen.selection) |*sel| sel else {
                 // If we don't have a selection we do not perform this
                 // action, allowing the keybind to fall through to the
                 // terminal.
                 return false;
             };
-            sel.adjust(screen, switch (direction) {
-                .left => .left,
-                .right => .right,
-                .up => .up,
-                .down => .down,
-                .page_up => .page_up,
-                .page_down => .page_down,
-                .home => .home,
-                .end => .end,
-                .beginning_of_line => .beginning_of_line,
-                .end_of_line => .end_of_line,
-            });
+            if (direction != .word_left and direction != .word_right) {
+                sel.adjust(screen, switch (direction) {
+                    .left => .left,
+                    .right => .right,
+                    .up => .up,
+                    .down => .down,
+                    .page_up => .page_up,
+                    .page_down => .page_down,
+                    .home => .home,
+                    .end => .end,
+                    .beginning_of_line => .beginning_of_line,
+                    .end_of_line => .end_of_line,
+                    .word_left, .word_right => unreachable,
+                });
+            }
 
             // If the selection endpoint is outside of the current viewpoint,
             // scroll it in to view. Note we always specifically use sel.end
