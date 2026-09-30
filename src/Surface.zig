@@ -2896,11 +2896,16 @@ pub fn keyCallback(
         break :event copy;
     };
 
-    // Backspace with a selected prompt input deletes the selection.
-    if (event.key == .backspace and
-        event.action != .release and
-        event.mods.binding().empty() and
-        try self.deleteSelectedInput()) return .consumed;
+    // Backspace or typing with a selected prompt input deletes the selection.
+    if (event.action != .release and
+        event.mods.binding().unset(.{ .shift = true }).empty())
+    {
+        if (event.key == .backspace) {
+            if (try self.deleteSelectedInput()) return .consumed;
+        } else if (event.utf8.len > 0 and event.utf8[0] >= 0x20) {
+            _ = try self.deleteSelectedInput();
+        }
+    }
 
     // Encode and send our key. If we didn't encode anything, then we
     // return the effect as ignored.
