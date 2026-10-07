@@ -3611,6 +3611,37 @@ pub fn promptClickMove(
     };
 }
 
+/// Determine the inputs necessary to move the cursor to the start
+/// (left_up) or just past the end (right_down) of the selection, like
+/// arrow keys in a text field. Returns null if the selection isn't within
+/// the cursor's prompt input.
+pub fn promptSelectionMove(
+    self: *Screen,
+    dir: PageList.Direction,
+) ?PromptClickMove {
+    const sel = self.selection orelse return null;
+    if (sel.rectangle) return null;
+    const start = sel.topLeft(self);
+    const end = sel.bottomRight(self);
+    if (start.rowAndCell().cell.semantic_content != .input or
+        end.rowAndCell().cell.semantic_content != .input) return null;
+
+    var sel_prompt_it = start.promptIterator(.left_up, null);
+    var cursor_prompt_it = self.cursor.page_pin.promptIterator(.left_up, null);
+    const sel_prompt = sel_prompt_it.next() orelse return null;
+    const cursor_prompt = cursor_prompt_it.next() orelse return null;
+    if (!sel_prompt.eql(cursor_prompt)) return null;
+
+    return self.promptClickLine(switch (dir) {
+        .left_up => start,
+        .right_down => right: {
+            var it = end.cellIterator(.right_down, null);
+            _ = it.next();
+            break :right it.next() orelse return null;
+        },
+    });
+}
+
 /// Determine the inputs required to move from the cursor to the given
 /// click location. If the cursor isn't currently at a prompt input
 /// location, this will return zero.
@@ -10743,6 +10774,33 @@ test "Screen: selectWord with character boundary" {
             } }, s.pages.pointFromPin(.screen, sel.end()).?);
         }
     }
+}
+
+test "Screen: promptSelectionMove" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var s = try init(io, alloc, .{ .cols = 20, .rows = 1, .max_scrollback_bytes = 0 });
+    defer s.deinit();
+    s.cursorSetSemanticContent(.{ .prompt = .initial });
+    try s.testWriteString("$ ");
+    s.cursorSetSemanticContent(.{ .input = .clear_explicit });
+    try s.testWriteString("echo hi");
+    try s.select(.init(
+        s.pages.pin(.{ .active = .{ .x = 2 } }).?,
+        s.pages.pin(.{ .active = .{ .x = 8 } }).?,
+        false,
+    ));
+
+    // Cursor at the end of the input
+    try testing.expectEqual(PromptClickMove{ .left = 7, .right = 0 }, s.promptSelectionMove(.left_up).?);
+    try testing.expectEqual(PromptClickMove.zero, s.promptSelectionMove(.right_down).?);
+
+    // Cursor at the start of the input
+    s.cursorAbsolute(2, 0);
+    try testing.expectEqual(PromptClickMove.zero, s.promptSelectionMove(.left_up).?);
+    try testing.expectEqual(PromptClickMove{ .left = 0, .right = 7 }, s.promptSelectionMove(.right_down).?);
 }
 
 test "Screen: selectOutput" {

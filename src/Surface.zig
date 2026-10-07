@@ -2897,11 +2897,16 @@ pub fn keyCallback(
     };
 
     // Backspace or typing with a selected prompt input deletes the selection.
+    // Left and right move the cursor to the edges of the selection.
     if (event.action != .release and
         event.mods.binding().unset(.{ .shift = true }).empty())
     {
         if (event.key == .backspace) {
             if (try self.deleteSelectedInput()) return .consumed;
+        } else if (event.key == .arrow_left or event.key == .arrow_right) {
+            if (try self.moveCursorToSelection(
+                if (event.key == .arrow_left) .left_up else .right_down,
+            )) return .consumed;
         } else if (event.utf8.len > 0 and event.utf8[0] >= 0x20) {
             _ = try self.deleteSelectedInput();
         }
@@ -4403,6 +4408,24 @@ fn deleteSelectedInput(self: *Surface) !bool {
     const left_arrow = if (t.modes.get(.cursor_keys)) "\x1bOD" else "\x1b[D";
     for (0..del.left) |_| self.queueIo(.{ .write_stable = left_arrow }, .locked);
     for (0..del.backspace) |_| self.queueIo(.{ .write_stable = "\x7f" }, .locked);
+
+    try self.setSelection(null);
+    try self.queueRender();
+    return true;
+}
+
+fn moveCursorToSelection(self: *Surface, dir: terminal.PageList.Direction) !bool {
+    self.renderer_state.mutex.lockUncancelable(global.io());
+    defer self.renderer_state.mutex.unlock(global.io());
+
+    const t = &self.io.terminal;
+    if (!t.cursorIsAtPrompt()) return false;
+    const move = t.screens.active.promptSelectionMove(dir) orelse return false;
+
+    const left_arrow = if (t.modes.get(.cursor_keys)) "\x1bOD" else "\x1b[D";
+    const right_arrow = if (t.modes.get(.cursor_keys)) "\x1bOC" else "\x1b[C";
+    for (0..move.left) |_| self.queueIo(.{ .write_stable = left_arrow }, .locked);
+    for (0..move.right) |_| self.queueIo(.{ .write_stable = right_arrow }, .locked);
 
     try self.setSelection(null);
     try self.queueRender();
