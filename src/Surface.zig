@@ -4449,7 +4449,9 @@ fn deleteSelectedInput(self: *Surface) !bool {
     const del = t.screens.active.promptDeleteSelection() orelse return false;
 
     const left_arrow = if (t.modes.get(.cursor_keys)) "\x1bOD" else "\x1b[D";
-    for (0..del.left) |_| self.queueIo(.{ .write_stable = left_arrow }, .locked);
+    const right_arrow = if (t.modes.get(.cursor_keys)) "\x1bOC" else "\x1b[C";
+    for (0..del.move.left) |_| self.queueIo(.{ .write_stable = left_arrow }, .locked);
+    for (0..del.move.right) |_| self.queueIo(.{ .write_stable = right_arrow }, .locked);
     for (0..del.backspace) |_| self.queueIo(.{ .write_stable = "\x7f" }, .locked);
 
     try self.setSelection(null);
