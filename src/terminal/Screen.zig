@@ -3590,47 +3590,39 @@ fn isAutosuggestion(pin: Pin) bool {
 }
 
 pub const PromptDeleteSelection = struct {
-    left: usize,
+    move: PromptClickMove,
     backspace: usize,
 };
 
 /// Determine the inputs necessary to delete the current selection from
-/// the prompt input: move left until the cursor is just after the
-/// selection, then backspace over it.
+/// the prompt input: move the cursor just past the selection, then
+/// backspace over it.
 ///
 /// This returns null if the selection isn't entirely input on the
-/// cursor's (possibly soft-wrapped) line before the cursor.
+/// cursor's (possibly soft-wrapped) line.
 pub fn promptDeleteSelection(self: *Screen) ?PromptDeleteSelection {
-    const sel = self.selection orelse return null;
-    if (sel.rectangle) return null;
+    const move = self.promptSelectionMove(.right_down) orelse return null;
+    const sel = self.selection.?;
     const start = sel.topLeft(self);
     const end = sel.bottomRight(self);
     const cursor = self.cursor.page_pin.*;
-    if (!end.before(cursor)) return null;
+    const first = if (cursor.before(start)) cursor else start;
+    const last = if (end.before(cursor)) cursor else end;
 
-    var result: PromptDeleteSelection = .{ .left = 0, .backspace = 0 };
-    var it = start.cellIterator(.right_down, cursor);
+    var backspace: usize = 0;
+    var it = first.cellIterator(.right_down, last);
     while (it.next()) |p| {
-        if (p.eql(cursor)) break;
         const rac = p.rowAndCell();
 
         // Crossing a hard line break isn't supported.
-        if (p.x == 0 and !p.eql(start) and !rac.row.wrap_continuation) return null;
+        if (p.x == 0 and !p.eql(first) and !rac.row.wrap_continuation) return null;
 
-        if (!rac.cell.hasText()) continue;
-        switch (rac.cell.semantic_content) {
-            .prompt => {},
-            .output => return null,
-            .input => if (end.before(p)) {
-                result.left += 1;
-            } else {
-                result.backspace += 1;
-            },
-        }
+        if (p.before(start) or end.before(p)) continue;
+        if (rac.cell.hasText() and rac.cell.semantic_content == .input) backspace += 1;
     }
 
-    if (result.backspace == 0) return null;
-    return result;
+    if (backspace == 0) return null;
+    return .{ .move = move, .backspace = backspace };
 }
 
 pub const LineIterator = struct {
@@ -11078,9 +11070,25 @@ test "Screen: promptDeleteSelection" {
         s.pages.pin(.{ .active = .{ .x = 5, .y = 1 } }).?,
         false,
     ));
-    const del = s.promptDeleteSelection().?;
-    try testing.expectEqual(3, del.left);
-    try testing.expectEqual(4, del.backspace);
+    {
+        const del = s.promptDeleteSelection().?;
+        try testing.expectEqual(PromptClickMove{ .left = 3, .right = 0 }, del.move);
+        try testing.expectEqual(4, del.backspace);
+    }
+
+    // Selecting everything with the cursor at the start of the input
+    // moves right to the end then deletes it all
+    s.cursorAbsolute(2, 1);
+    try s.select(.init(
+        s.pages.pin(.{ .active = .{ .x = 2, .y = 1 } }).?,
+        s.pages.pin(.{ .active = .{ .x = 8, .y = 1 } }).?,
+        false,
+    ));
+    {
+        const del = s.promptDeleteSelection().?;
+        try testing.expectEqual(PromptClickMove{ .left = 0, .right = 7 }, del.move);
+        try testing.expectEqual(7, del.backspace);
+    }
 
     // Selections including output aren't deleted
     try s.select(.init(
